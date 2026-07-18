@@ -4,6 +4,8 @@ Index SEC 10-K / 10-Q filings by company and date range, then ask cross-filing q
 with grounded LLM answers. OpenAI `text-embedding-3-small` embeddings stored in **pgvector**,
 retrieved via cosine similarity. Four providers with per-model selection at runtime.
 
+**[→ Portfolio demo](https://bganguly.github.io/?open=edgar)**&nbsp;&nbsp;*Lambda cold-start · ~2–5 s on first request*
+
 ---
 
 ## Using the App
