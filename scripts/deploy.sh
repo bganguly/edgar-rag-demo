@@ -274,6 +274,11 @@ fi
 cd "$ROOT/frontend"
 [[ -d node_modules ]] || npm install
 
+if [[ ! -f ".vercel/project.json" ]]; then
+  printf '  Linking Vercel project edgar-rag-demo...\n'
+  vercel link --project edgar-rag-demo --yes 2>&1 | grep -v "^$" || true
+fi
+
 printf '\n  Setting Vercel environment variables...\n'
 _vercel_env() {
   local _key="$1" _val="$2"
