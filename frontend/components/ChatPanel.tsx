@@ -2,7 +2,7 @@
 
 import { useChat } from "ai/react";
 import { useEffect, useRef, useState } from "react";
-import type { Provider } from "@/app/page";
+import type { Provider } from "@/lib/providers";
 
 interface Chunk { content: string; source: string; score: number }
 
