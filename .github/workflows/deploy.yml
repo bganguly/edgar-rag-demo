@@ -1,0 +1,37 @@
+name: Build & Push Backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/deploy.yml'
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPO: edgar-lite-backend
+          TAG: ${{ github.sha }}
+        run: |
+          SHORT_SHA="${TAG::7}"
+          docker build --platform linux/amd64 -t "$REGISTRY/$REPO:$SHORT_SHA" backend/
+          docker tag "$REGISTRY/$REPO:$SHORT_SHA" "$REGISTRY/$REPO:latest"
+          docker push "$REGISTRY/$REPO:$SHORT_SHA"
+          docker push "$REGISTRY/$REPO:latest"

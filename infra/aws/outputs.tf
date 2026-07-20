@@ -17,11 +17,3 @@ output "aws_region" {
 output "name_prefix" {
   value = var.name_prefix
 }
-
-output "build_bucket" {
-  value = aws_s3_bucket.build_artifacts.bucket
-}
-
-output "codebuild_backend_project" {
-  value = aws_codebuild_project.backend.name
-}
