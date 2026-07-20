@@ -218,21 +218,22 @@ echo ""
 printf '  Checking ECR for image %s...\n' "$TAG"
 BE_REPO_NAME="${TF_VAR_name_prefix}-backend"
 if ! _ecr_image_exists "$BE_REPO_NAME" "$TAG"; then
-  printf '  Image %s not in ECR yet — waiting for GitHub Actions build (up to 10 min)...\n' "$TAG"
-  _ecr_elapsed=0
-  until _ecr_image_exists "$BE_REPO_NAME" "$TAG"; do
-    if (( _ecr_elapsed >= 600 )); then
-      printf '  Timed out: %s not found. Falling back to latest tag...\n' "$TAG"
-      if _ecr_image_exists "$BE_REPO_NAME" latest; then
-        TAG=latest
-        break
+  if _ecr_image_exists "$BE_REPO_NAME" latest; then
+    printf '  SHA %s not in ECR (backend unchanged) — using latest.\n' "$TAG"
+    TAG=latest
+  else
+    printf '  No image in ECR yet — waiting for GitHub Actions build (up to 10 min)...\n'
+    _ecr_elapsed=0
+    until _ecr_image_exists "$BE_REPO_NAME" latest; do
+      if (( _ecr_elapsed >= 600 )); then
+        printf '  Timed out. Check Actions: https://github.com/bganguly/edgar-rag-demo/actions\n'
+        exit 1
       fi
-      printf '  No image found at all. Check Actions: https://github.com/bganguly/edgar-rag-demo/actions\n'
-      exit 1
-    fi
-    sleep 15; _ecr_elapsed=$(( _ecr_elapsed + 15 ))
-    printf '  ...%ds\n' "$_ecr_elapsed"
-  done
+      sleep 15; _ecr_elapsed=$(( _ecr_elapsed + 15 ))
+      printf '  ...%ds\n' "$_ecr_elapsed"
+    done
+    TAG=latest
+  fi
 fi
 printf '  Backend image %s found in ECR.\n' "$TAG"
 _MANIFEST=$(aws ecr batch-get-image --repository-name "$BE_REPO_NAME" \
