@@ -18,8 +18,9 @@ printf '  [1] Local   — uvicorn + npm dev, no Docker (Postgres via .env)'
 printf '\n'
 printf '  [2] Serverless — AWS Lambda + Neon + Vercel  (~$0/mo)'
 (( _aws_lite_count > 0 )) && printf ' [%s resources active]' "$_aws_lite_count" || printf ' [not deployed]'
-printf '\n\nChoice [1/2]: '
+printf '\n\nChoice [1/2, default=2]: '
 read -r _MODE
+_MODE="${_MODE:-2}"
 case "$_MODE" in
   2) TARGET="aws"; DEPLOY_WORKSPACE="lite"; TF_VAR_name_prefix="edgar-lite"
      export DEPLOY_WORKSPACE TF_VAR_name_prefix
@@ -80,19 +81,47 @@ printf '  Credentials valid: %s\n' "$(aws sts get-caller-identity --query 'Arn' 
 
 AWS_REGION=$(aws configure get region 2>/dev/null || echo "us-east-1")
 
+_GH_REPO="$(git -C "$ROOT" remote get-url origin 2>/dev/null \
+  | sed 's|.*github\.com[:/]\(.*\)\.git$|\1|; s|.*github\.com[:/]\(.*\)$|\1|')"
+if command -v gh >/dev/null 2>&1 && [[ -n "$_GH_REPO" ]]; then
+  printf '  Syncing AWS credentials to GitHub Actions secrets (%s)...\n' "$_GH_REPO"
+  aws configure get aws_access_key_id     | gh secret set AWS_ACCESS_KEY_ID     --repo "$_GH_REPO"
+  aws configure get aws_secret_access_key | gh secret set AWS_SECRET_ACCESS_KEY --repo "$_GH_REPO"
+  printf '%s' "$AWS_REGION"               | gh secret set AWS_REGION            --repo "$_GH_REPO"
+fi
+
 echo ""
-echo "[2/5] Provisioning ECR and core infra..."
+echo "[2/5] Provisioning bootstrap infra (ECR, IAM)..."
 INFRA_DIR="$ROOT/infra/aws"
 cd "$INFRA_DIR"
 terraform init -upgrade -input=false
+printf '  Selecting workspace and pruning stale state...\n'
 terraform workspace select "$DEPLOY_WORKSPACE" 2>/dev/null \
   || terraform workspace new "$DEPLOY_WORKSPACE"
+
+terraform state rm aws_codebuild_project.backend                         2>/dev/null || true
+terraform state rm aws_iam_role_policy.codebuild                         2>/dev/null || true
+terraform state rm aws_iam_role.codebuild                                2>/dev/null || true
+terraform state rm aws_s3_bucket_lifecycle_configuration.build_artifacts 2>/dev/null || true
+
+_STATE_FILE="$INFRA_DIR/terraform.tfstate.d/${DEPLOY_WORKSPACE}/terraform.tfstate"
+if [[ -f "$_STATE_FILE" ]]; then
+  python3 -c "
+import json
+with open('$_STATE_FILE') as f: s = json.load(f)
+for k in ('codebuild_backend_project', 'build_bucket'):
+    s.get('outputs', {}).pop(k, None)
+with open('$_STATE_FILE', 'w') as f: json.dump(s, f, indent=2)
+" 2>/dev/null || true
+fi
 
 _tf() { terraform output -raw "$1" 2>/dev/null; }
 
 terraform apply -auto-approve -var "name_prefix=${TF_VAR_name_prefix}" \
-  -target=aws_ecr_repository.backend
+  -target=aws_ecr_repository.backend \
+  -target=aws_ecr_lifecycle_policy.backend
 
+printf '  Reading Terraform outputs...\n'
 BE_ECR_URI=$(_tf backend_ecr_uri)
 AWS_REGION=$(_tf aws_region || aws configure get region 2>/dev/null || echo "us-east-1")
 
@@ -184,20 +213,28 @@ _ecr_image_exists() {
     --region "$AWS_REGION" >/dev/null 2>&1
 }
 
+echo ""
+printf '  Checking ECR for image %s...\n' "$TAG"
 BE_REPO_NAME="${TF_VAR_name_prefix}-backend"
-if _ecr_image_exists "$BE_REPO_NAME" "$TAG"; then
-  printf '  Backend image %s already in ECR — skipping build.\n' "$TAG"
-  _MANIFEST=$(aws ecr batch-get-image --repository-name "$BE_REPO_NAME" \
-    --image-ids "imageTag=${TAG}" --query 'images[0].imageManifest' \
-    --output text --no-cli-pager 2>/dev/null)
-  aws ecr put-image --repository-name "$BE_REPO_NAME" --image-tag latest \
-    --image-manifest "$_MANIFEST" --no-cli-pager >/dev/null 2>&1 \
-    && printf '  Re-tagged %s as latest.\n' "$TAG" || true
-else
-  printf '  Error: image %s not found in ECR (%s).\n' "$TAG" "$BE_REPO_NAME"
-  printf '  Push to main to trigger the GitHub Actions build first, then re-run this script.\n'
-  exit 1
+if ! _ecr_image_exists "$BE_REPO_NAME" "$TAG"; then
+  printf '  Image %s not in ECR yet — waiting for GitHub Actions build (up to 10 min)...\n' "$TAG"
+  _ecr_elapsed=0
+  until _ecr_image_exists "$BE_REPO_NAME" "$TAG"; do
+    if (( _ecr_elapsed >= 600 )); then
+      printf '  Timed out waiting for %s. Check Actions: https://github.com/bganguly/edgar-rag-demo/actions\n' "$TAG"
+      exit 1
+    fi
+    sleep 15; _ecr_elapsed=$(( _ecr_elapsed + 15 ))
+    printf '  ...%ds\n' "$_ecr_elapsed"
+  done
 fi
+printf '  Backend image %s found in ECR.\n' "$TAG"
+_MANIFEST=$(aws ecr batch-get-image --repository-name "$BE_REPO_NAME" \
+  --image-ids "imageTag=${TAG}" --query 'images[0].imageManifest' \
+  --output text --no-cli-pager 2>/dev/null)
+aws ecr put-image --repository-name "$BE_REPO_NAME" --image-tag latest \
+  --image-manifest "$_MANIFEST" --no-cli-pager >/dev/null 2>&1 \
+  && printf '  Re-tagged %s as latest.\n' "$TAG" || true
 
 echo "  Finalising Lambda and remaining infra..."
 cd "$INFRA_DIR"
