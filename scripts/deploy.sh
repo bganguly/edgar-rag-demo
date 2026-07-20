@@ -206,7 +206,8 @@ _ssm_update "/${TF_VAR_name_prefix}/nvidia-key"    "${NVIDIA_API_KEY:-}"    "$_O
 _ssm_update "/${TF_VAR_name_prefix}/google-key"    "${GOOGLE_API_KEY:-}"    "$_OLD_GOOGLE"
 _ssm_update "/${TF_VAR_name_prefix}/edgar-ua"      "$EDGAR_USER_AGENT"      "${_OLD_EDGAR_UA:-}"
 
-TAG=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)
+_REMOTE_SHA=$(git -C "$ROOT" ls-remote origin HEAD 2>/dev/null | cut -c1-7)
+TAG="${_REMOTE_SHA:-$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)}"
 
 _ecr_image_exists() {
   aws ecr describe-images --repository-name "$1" --image-ids "imageTag=$2" \
@@ -221,7 +222,12 @@ if ! _ecr_image_exists "$BE_REPO_NAME" "$TAG"; then
   _ecr_elapsed=0
   until _ecr_image_exists "$BE_REPO_NAME" "$TAG"; do
     if (( _ecr_elapsed >= 600 )); then
-      printf '  Timed out waiting for %s. Check Actions: https://github.com/bganguly/edgar-rag-demo/actions\n' "$TAG"
+      printf '  Timed out: %s not found. Falling back to latest tag...\n' "$TAG"
+      if _ecr_image_exists "$BE_REPO_NAME" latest; then
+        TAG=latest
+        break
+      fi
+      printf '  No image found at all. Check Actions: https://github.com/bganguly/edgar-rag-demo/actions\n'
       exit 1
     fi
     sleep 15; _ecr_elapsed=$(( _ecr_elapsed + 15 ))
@@ -232,9 +238,11 @@ printf '  Backend image %s found in ECR.\n' "$TAG"
 _MANIFEST=$(aws ecr batch-get-image --repository-name "$BE_REPO_NAME" \
   --image-ids "imageTag=${TAG}" --query 'images[0].imageManifest' \
   --output text --no-cli-pager 2>/dev/null)
-aws ecr put-image --repository-name "$BE_REPO_NAME" --image-tag latest \
-  --image-manifest "$_MANIFEST" --no-cli-pager >/dev/null 2>&1 \
-  && printf '  Re-tagged %s as latest.\n' "$TAG" || true
+if [[ "$TAG" != "latest" ]]; then
+  aws ecr put-image --repository-name "$BE_REPO_NAME" --image-tag latest \
+    --image-manifest "$_MANIFEST" --no-cli-pager >/dev/null 2>&1 \
+    && printf '  Re-tagged %s as latest.\n' "$TAG" || true
+fi
 
 echo "  Finalising Lambda and remaining infra..."
 cd "$INFRA_DIR"
