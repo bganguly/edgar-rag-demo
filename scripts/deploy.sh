@@ -90,6 +90,15 @@ if command -v gh >/dev/null 2>&1 && [[ -n "$_GH_REPO" ]]; then
   printf '%s' "$AWS_REGION"               | gh secret set AWS_REGION            --repo "$_GH_REPO"
 fi
 
+_VERCEL_GIT_INTEGRATED=false
+if command -v gh >/dev/null 2>&1 && [[ -n "$_GH_REPO" ]]; then
+  if gh api "repos/${_GH_REPO}/hooks" 2>/dev/null \
+    | python3 -c "import json,sys; h=json.load(sys.stdin); sys.exit(0 if any('vercel' in str(x).lower() for x in h) else 1)" 2>/dev/null; then
+    _VERCEL_GIT_INTEGRATED=true
+    printf '  Note: Vercel Git integration webhook detected on %s.\n' "$_GH_REPO"
+  fi
+fi
+
 echo ""
 echo "[2/5] Provisioning bootstrap infra (ECR, IAM)..."
 INFRA_DIR="$ROOT/infra/aws"
@@ -332,3 +341,27 @@ printf '  App:       %s\n' "$FRONTEND_URL"
 printf '  API:       %s\n' "$BACKEND_URL"
 printf '  Cost:      ~$0/mo  (Lambda + Neon + Vercel free tiers)\n'
 printf '  Tear down: ./scripts/infra-down.sh\n'
+
+if [[ "$_VERCEL_GIT_INTEGRATED" == true ]]; then
+  printf '\n  ⚠  RACE CONDITION RISK — Vercel Git integration is active.\n'
+  printf '     Every git push (including the README commit above) can trigger a\n'
+  printf '     parallel Vercel auto-build that has none of the env vars injected\n'
+  printf '     by this script and may have claimed the production alias.\n'
+  printf '\n  Manual checks to run now:\n'
+  printf '\n  1. List recent deployments (run from the frontend directory):\n'
+  printf '       cd %s/frontend && vercel ls --limit 5\n' "$ROOT"
+  printf '     Look at the SOURCE column:\n'
+  printf '       cli  = deployed by this script  (correct)\n'
+  printf '       git  = triggered by a git push  (may be wrong)\n'
+  printf '     If the newest entry is "git" and is marked Production, continue below.\n'
+  printf '\n  2. Promote the correct (cli) deployment:\n'
+  printf '       vercel promote <URL-of-the-cli-deployment> --yes\n'
+  printf '     Copy the URL from the "cli" row in the vercel ls output above.\n'
+  printf '\n  3. Confirm the alias resolves correctly:\n'
+  printf '       curl -sI %s | head -1\n' "${FRONTEND_URL:-https://edgar-rag-demo.vercel.app}"
+  printf '     Expect: HTTP/2 200  (a 404 means the wrong build is live)\n'
+  printf '\n  If you want to eliminate this risk permanently:\n'
+  printf '     Disable the Git integration in the Vercel dashboard under\n'
+  printf '     Project → Settings → Git → Disconnect.\n'
+  printf '     This script manages all deployments directly via the Vercel CLI.\n'
+fi
