@@ -322,6 +322,7 @@ _vercel_env "ANTHROPIC_API_KEY"  "${ANTHROPIC_API_KEY:-}"
 _vercel_env "NVIDIA_API_KEY"     "${NVIDIA_API_KEY:-}"
 _vercel_env "GOOGLE_API_KEY"     "${GOOGLE_API_KEY:-}"
 
+cd "$ROOT"
 printf '  Deploying frontend to Vercel...\n'
 _VERCEL_OUT=$(mktemp /tmp/vercel-out-XXXXXX)
 vercel --prod --yes 2>&1 | tee "$_VERCEL_OUT"
